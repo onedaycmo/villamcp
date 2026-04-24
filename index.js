@@ -1,6 +1,6 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
 import { z } from "zod";
 import http from "http";
 import { runOnboarding } from "./skills/onboarding.js";
@@ -18,8 +18,6 @@ function createServer() {
     description:
       "VILLA Autonomous Marketing Agency — full-service marketing execution inside Claude.",
   });
-
-  // ─── Tool: Onboarding ──────────────────────────────────────────────────────
 
   server.tool(
     "villa_onboarding",
@@ -47,8 +45,6 @@ function createServer() {
     }
   );
 
-  // ─── Tool: Campaign Manager ────────────────────────────────────────────────
-
   server.tool(
     "villa_campaign_manager",
     "Build email campaigns, SMS sequences, nurture sequences, and promotional campaigns. " +
@@ -72,8 +68,6 @@ function createServer() {
       return { content: [{ type: "text", text: result }] };
     }
   );
-
-  // ─── Tool: Content Director ────────────────────────────────────────────────
 
   server.tool(
     "villa_content_director",
@@ -99,8 +93,6 @@ function createServer() {
     }
   );
 
-  // ─── Tool: Brand Strategist ────────────────────────────────────────────────
-
   server.tool(
     "villa_brand_strategist",
     "Build brand positioning, tone of voice guides, luxury brand direction, and brand audits. " +
@@ -124,8 +116,6 @@ function createServer() {
       return { content: [{ type: "text", text: result }] };
     }
   );
-
-  // ─── Tool: Growth Analyst ──────────────────────────────────────────────────
 
   server.tool(
     "villa_growth_analyst",
@@ -154,55 +144,60 @@ function createServer() {
   return server;
 }
 
-// ─── CORS Helper ─────────────────────────────────────────────────────────────
-
-function setCORSHeaders(res) {
-  res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS, DELETE");
-  res.setHeader(
-    "Access-Control-Allow-Headers",
-    "Content-Type, Authorization, Mcp-Session-Id"
-  );
-  res.setHeader("Access-Control-Expose-Headers", "Mcp-Session-Id");
-}
-
-// ─── HTTP Server ─────────────────────────────────────────────────────────────
+// ─── HTTP Server with SSE Transport ──────────────────────────────────────────
 
 const server = createServer();
 const port = parseInt(process.env.PORT || "8080");
+const transports = new Map();
 
 const httpServer = http.createServer(async (req, res) => {
-  setCORSHeaders(res);
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
 
-  // Handle preflight
   if (req.method === "OPTIONS") {
     res.writeHead(204);
     res.end();
     return;
   }
 
-  // Health check
   if (req.method === "GET" && req.url === "/health") {
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ status: "ok", server: "villa-mcp", version: "1.0.0" }));
     return;
   }
 
-  // MCP endpoint
-  if (req.url === "/mcp" || req.url === "/mcp/") {
-    try {
-      const transport = new StreamableHTTPServerTransport({
-        sessionIdGenerator: () => crypto.randomUUID(),
-      });
-      await server.connect(transport);
-      await transport.handleRequest(req, res);
-    } catch (err) {
-      console.error("MCP error:", err);
-      if (!res.headersSent) {
-        res.writeHead(500, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ error: "Internal server error" }));
-      }
+  // SSE connection — Claude opens this to receive server events
+  if (req.method === "GET" && (req.url === "/mcp" || req.url === "/mcp/")) {
+    res.setHeader("Content-Type", "text/event-stream");
+    res.setHeader("Cache-Control", "no-cache");
+    res.setHeader("Connection", "keep-alive");
+
+    const transport = new SSEServerTransport("/mcp/message", res);
+    transports.set(transport.sessionId, transport);
+
+    transport.onclose = () => {
+      transports.delete(transport.sessionId);
+    };
+
+    await server.connect(transport);
+    await transport.start();
+    return;
+  }
+
+  // Message endpoint — Claude POSTs tool calls here
+  if (req.method === "POST" && req.url?.startsWith("/mcp/message")) {
+    const url = new URL(req.url, `http://localhost:${port}`);
+    const sessionId = url.searchParams.get("sessionId");
+    const transport = transports.get(sessionId);
+
+    if (!transport) {
+      res.writeHead(404, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Session not found" }));
+      return;
     }
+
+    await transport.handlePostMessage(req, res);
     return;
   }
 
@@ -212,6 +207,7 @@ const httpServer = http.createServer(async (req, res) => {
 
 httpServer.listen(port, "0.0.0.0", () => {
   console.log(`VILLA MCP server running on port ${port}`);
-  console.log(`MCP endpoint: http://localhost:${port}/mcp`);
-  console.log(`Health check: http://localhost:${port}/health`);
+  console.log(`SSE endpoint:  http://localhost:${port}/mcp`);
+  console.log(`Post endpoint: http://localhost:${port}/mcp/message`);
+  console.log(`Health check:  http://localhost:${port}/health`);
 });
