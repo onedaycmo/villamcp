@@ -169,6 +169,18 @@ if (USE_HTTP) {
   const transports = new Map();
 
   const httpServer = http.createServer(async (req, res) => {
+    // ── CORS headers — required for Claude web to connect ─────────────────
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+
+    // ── CORS preflight ────────────────────────────────────────────────────
+    if (req.method === "OPTIONS") {
+      res.writeHead(204);
+      res.end();
+      return;
+    }
+
     // ── Health check ──────────────────────────────────────────────────────
     if (req.method === "GET" && req.url === "/health") {
       res.writeHead(200, { "Content-Type": "application/json" });
@@ -178,6 +190,10 @@ if (USE_HTTP) {
 
     // ── SSE connection — Claude opens this to receive server events ───────
     if (req.method === "GET" && (req.url === "/mcp" || req.url === "/mcp/")) {
+      res.setHeader("Content-Type", "text/event-stream");
+      res.setHeader("Cache-Control", "no-cache");
+      res.setHeader("Connection", "keep-alive");
+
       const transport = new SSEServerTransport("/mcp/message", res);
       transports.set(transport.sessionId, transport);
 
