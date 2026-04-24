@@ -1,5 +1,4 @@
-// VILLA Onboarding Skill
-// Runs client intake, pre-fills from existing context, builds Brand Hub
+import { callClaude } from "./claude.js";
 
 export async function runOnboarding({ existing_context, client_input }) {
   const hasContext = existing_context && existing_context.trim().length > 0;
