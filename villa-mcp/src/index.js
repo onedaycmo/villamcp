@@ -1,6 +1,6 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
 import { z } from "zod";
 import http from "http";
 import { runOnboarding } from "./skills/onboarding.js";
@@ -154,28 +154,55 @@ function createServer() {
   return server;
 }
 
-// ─── Transport: HTTP (for Railway/Render) or Stdio (for local testing) ───────
+// ─── Transport: SSE (for Railway/Render) or Stdio (for local testing) ────────
 
 const USE_HTTP = process.env.PORT !== undefined;
 
 if (USE_HTTP) {
   // Remote hosted mode — Railway, Render, or any VPS
+  // SSE transport is required for Claude's web browser version
   const server = createServer();
   const port = parseInt(process.env.PORT || "3000");
 
+  // Map of active SSE transports keyed by session ID so POST messages
+  // can be routed back to the correct open SSE connection.
+  const transports = new Map();
+
   const httpServer = http.createServer(async (req, res) => {
+    // ── Health check ──────────────────────────────────────────────────────
     if (req.method === "GET" && req.url === "/health") {
       res.writeHead(200, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ status: "ok", server: "villa-mcp", version: "1.0.0" }));
       return;
     }
 
-    if (req.url === "/mcp" || req.url === "/mcp/") {
-      const transport = new StreamableHTTPServerTransport({
-        sessionIdGenerator: () => crypto.randomUUID(),
-      });
+    // ── SSE connection — Claude opens this to receive server events ───────
+    if (req.method === "GET" && (req.url === "/mcp" || req.url === "/mcp/")) {
+      const transport = new SSEServerTransport("/mcp/message", res);
+      transports.set(transport.sessionId, transport);
+
+      transport.onclose = () => {
+        transports.delete(transport.sessionId);
+      };
+
       await server.connect(transport);
-      await transport.handleRequest(req, res);
+      await transport.start();
+      return;
+    }
+
+    // ── Message endpoint — Claude POSTs tool calls here ───────────────────
+    if (req.method === "POST" && (req.url === "/mcp/message" || req.url?.startsWith("/mcp/message?"))) {
+      const url = new URL(req.url, `http://localhost:${port}`);
+      const sessionId = url.searchParams.get("sessionId");
+      const transport = transports.get(sessionId);
+
+      if (!transport) {
+        res.writeHead(404, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "Session not found" }));
+        return;
+      }
+
+      await transport.handlePostMessage(req, res);
       return;
     }
 
@@ -185,8 +212,9 @@ if (USE_HTTP) {
 
   httpServer.listen(port, () => {
     console.log(`VILLA MCP server running on port ${port}`);
-    console.log(`MCP endpoint: http://localhost:${port}/mcp`);
-    console.log(`Health check: http://localhost:${port}/health`);
+    console.log(`SSE endpoint:  http://localhost:${port}/mcp`);
+    console.log(`Post endpoint: http://localhost:${port}/mcp/message`);
+    console.log(`Health check:  http://localhost:${port}/health`);
   });
 } else {
   // Local stdio mode — for testing with Claude Desktop
