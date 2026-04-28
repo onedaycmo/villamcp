@@ -1,6 +1,6 @@
 {
   "name": "villa-mcp-server",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "VILLA Autonomous Marketing Agency MCP Server",
   "type": "module",
   "main": "src/index.js",
@@ -9,7 +9,7 @@
     "dev": "node --watch src/index.js"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.0.0"
+    "@modelcontextprotocol/sdk": "^1.0.0",
     "zod": "^3.0.0"
   },
   "engines": {
