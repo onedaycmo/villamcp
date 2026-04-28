@@ -1,4 +1,7 @@
 // Shared Anthropic API caller for all Villa skill modules
+// Single model reference — change here to update everywhere
+
+export const VILLA_MODEL = "claude-sonnet-4-6";
 
 export async function callClaude(systemPrompt, userMessage, maxTokens = 4096) {
   const response = await fetch("https://api.anthropic.com/v1/messages", {
@@ -9,7 +12,7 @@ export async function callClaude(systemPrompt, userMessage, maxTokens = 4096) {
       "anthropic-version": "2023-06-01",
     },
     body: JSON.stringify({
-      model: "claude-sonnet-4-6",
+      model: VILLA_MODEL,
       max_tokens: maxTokens,
       system: systemPrompt,
       messages: [{ role: "user", content: userMessage }],
